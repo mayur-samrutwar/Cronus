@@ -1,4 +1,3 @@
-import Image from "next/image";
 import localFont from "next/font/local";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -7,6 +6,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { Loader2 } from "lucide-react";
+import Link from "next/link";
 
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
@@ -24,14 +25,14 @@ export default function Home() {
   const [formData, setFormData] = useState({
     projectName: "",
     projectDescription: "",
-    frontEnd: 50,
-    backEnd: 50,
-    design: 50,
-    ml: 50,
     hoursPerWeek: 40,
     bufferTime: 0,
+    teamMembers: 1,
   });
   const [estimate, setEstimate] = useState(null);
+  const [subtasks, setSubtasks] = useState([]);
+  const [isGeneratingSubtasks, setIsGeneratingSubtasks] = useState(false);
+  const [isGeneratingEstimate, setIsGeneratingEstimate] = useState(false);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -42,18 +43,63 @@ export default function Home() {
     setFormData({ ...formData, [name]: value[0] });
   };
 
-  const calculateEstimate = () => {
-    // More sophisticated calculation based on all inputs
-    const complexity = (formData.frontEnd + formData.backEnd + formData.design + formData.ml) / 4;
-    const baseHours = 100 + (complexity * 2);
-    const adjustedHours = baseHours + formData.bufferTime;
-    const days = Math.ceil(adjustedHours / formData.hoursPerWeek * 7);
-    setEstimate({ days, hours: Math.round(adjustedHours) });
+  const generateEstimate = async () => {
+    setIsGeneratingEstimate(true);
+    try {
+      const techStackExpertise = subtasks.reduce((acc, task, index) => {
+        acc[task] = formData[`group${index}`] / 10;
+        return acc;
+      }, {});
+
+      const response = await fetch('/api/generate-estimate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          projectDescription: formData.projectDescription,
+          techStackExpertise,
+          hoursPerWeek: formData.hoursPerWeek,
+          bufferTime: formData.bufferTime,
+          teamMembers: formData.teamMembers,
+        }),
+      });
+      const data = await response.json();
+      const hours = data.estimatedHours;
+      const days = Math.floor(hours / 8);
+      const remainingHours = hours % 8;
+      const perPersonHours = Math.round(hours / formData.teamMembers);
+      const perPersonDays = Math.floor(perPersonHours / 8);
+      const perPersonRemainingHours = perPersonHours % 8;
+      setEstimate({ hours, days, remainingHours, perPersonHours, perPersonDays, perPersonRemainingHours });
+      setStep(4);
+    } catch (error) {
+      console.error('Error generating estimate:', error);
+    } finally {
+      setIsGeneratingEstimate(false);
+    }
   };
 
-  const handleSubmit = () => {
-    calculateEstimate();
-    setStep(4);
+  const generateSubtasks = async () => {
+    setIsGeneratingSubtasks(true);
+    try {
+      const response = await fetch('/api/generate-subtasks', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ projectDescription: formData.projectDescription }),
+      });
+      const data = await response.json();
+      console.log('API Response:', data);
+      setSubtasks(data.data);
+      setStep(2);
+    } catch (error) {
+      console.error('Error generating subtasks:', error);
+      console.error('Error details:', error.response);
+    } finally {
+      setIsGeneratingSubtasks(false);
+    }
   };
 
   const renderStep = () => {
@@ -89,20 +135,25 @@ export default function Home() {
               <CardTitle>Technical Expertise</CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
-              {["frontEnd", "backEnd", "design", "ml"].map((domain) => (
-                <div key={domain} className="space-y-2">
+              {subtasks.map((group, index) => (
+                <div key={index} className="space-y-2">
                   <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 capitalize">
-                    {domain.replace(/([A-Z])/g, " $1").trim()}
+                    {group}
                   </label>
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Beginner</span>
+                    <span>Moderate</span>
+                    <span>Expert</span>
+                  </div>
                   <Slider
-                    name={domain}
+                    name={`group${index}`}
                     min={0}
                     max={100}
                     step={1}
-                    value={[formData[domain]]}
-                    onValueChange={(value) => handleSliderChange(domain, value)}
+                    value={[formData[`group${index}`] || 50]}
+                    onValueChange={(value) => handleSliderChange(`group${index}`, value)}
                   />
-                  <p className="text-sm text-muted-foreground">{formData[domain]}%</p>
+                  <p className="text-sm text-muted-foreground">{formData[`group${index}`] || 50}%</p>
                 </div>
               ))}
             </CardContent>
@@ -116,7 +167,7 @@ export default function Home() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <label className="text-sm font-medium leading-none">Hours per Week</label>
+                <label className="text-sm font-medium leading-none">Hours per Week per Person</label>
                 <Input
                   type="number"
                   name="hoursPerWeek"
@@ -136,6 +187,16 @@ export default function Home() {
                   min={0}
                 />
               </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium leading-none">Number of Team Members</label>
+                <Input
+                  type="number"
+                  name="teamMembers"
+                  value={formData.teamMembers}
+                  onChange={handleInputChange}
+                  min={1}
+                />
+              </div>
             </CardContent>
           </>
         );
@@ -149,10 +210,16 @@ export default function Home() {
               {estimate && (
                 <div className="text-center">
                   <p className="text-2xl font-bold mb-2">
-                    Estimated time: {estimate.days} days
+                    Total estimated time: {estimate.days} days {estimate.remainingHours > 0 ? `${estimate.remainingHours} hours` : ''}
+                  </p>
+                  <p className="text-lg text-muted-foreground mb-4">
+                    ({estimate.hours} hours)
+                  </p>
+                  <p className="text-xl font-bold mb-2">
+                    Per person: {estimate.perPersonDays} days {estimate.perPersonRemainingHours > 0 ? `${estimate.perPersonRemainingHours} hours` : ''}
                   </p>
                   <p className="text-lg text-muted-foreground">
-                    ({estimate.hours} hours)
+                    ({estimate.perPersonHours} hours)
                   </p>
                 </div>
               )}
@@ -190,9 +257,38 @@ export default function Home() {
               {step < 4 ? (
                 <Button
                   type="button"
-                  onClick={() => step === 3 ? handleSubmit() : setStep(step + 1)}
+                  onClick={() => {
+                    if (step === 1) {
+                      generateSubtasks();
+                    } else if (step === 3) {
+                      generateEstimate();
+                    } else {
+                      setStep(step + 1);
+                    }
+                  }}
+                  disabled={(step === 1 && isGeneratingSubtasks) || (step === 3 && isGeneratingEstimate)}
                 >
-                  {step === 3 ? "Calculate Estimate" : "Next"}
+                  {step === 1 ? (
+                    isGeneratingSubtasks ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Generating...
+                      </>
+                    ) : (
+                      "Generate Subtasks"
+                    )
+                  ) : step === 3 ? (
+                    isGeneratingEstimate ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Calculating...
+                      </>
+                    ) : (
+                      "Calculate Estimate"
+                    )
+                  ) : (
+                    "Next"
+                  )}
                 </Button>
               ) : (
                 <Button
@@ -200,15 +296,13 @@ export default function Home() {
                   onClick={() => {
                     setStep(1);
                     setEstimate(null);
+                    setSubtasks([]);
                     setFormData({
                       projectName: "",
                       projectDescription: "",
-                      frontEnd: 50,
-                      backEnd: 50,
-                      design: 50,
-                      ml: 50,
                       hoursPerWeek: 40,
                       bufferTime: 0,
+                      teamMembers: 1,
                     });
                   }}
                 >
@@ -220,7 +314,7 @@ export default function Home() {
         </Card>
       </main>
       <footer className="w-full text-center py-4 text-sm text-gray-600 dark:text-gray-400">
-        MIT Licenced
+        MIT Licenced. <Link href="https://github.com/mayur-samrutwar/Cronus">Github</Link>
       </footer>
     </div>
   );
